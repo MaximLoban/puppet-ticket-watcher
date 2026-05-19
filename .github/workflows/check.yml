@@ -2,7 +2,7 @@ name: Check tickets
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "3-53/10 * * * *"
   workflow_dispatch: {}
 
 permissions:
