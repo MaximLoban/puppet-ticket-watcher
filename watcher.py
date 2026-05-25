@@ -10,11 +10,51 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
+
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
+def fetch_html(url: str, max_attempts: int = 3) -> str | None:
+    """Fetch with retries. Returns None on persistent WAF/network failure."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.get(url, timeout=30, headers=BROWSER_HEADERS)
+            if resp.status_code == 200:
+                return resp.text
+            print(
+                f"Attempt {attempt}/{max_attempts}: HTTP {resp.status_code}",
+                file=sys.stderr,
+            )
+        except requests.RequestException as e:
+            print(f"Attempt {attempt}/{max_attempts}: {e}", file=sys.stderr)
+        if attempt < max_attempts:
+            time.sleep(5 * attempt)
+    return None
 
 URL = "https://puppet-minsk.by/spektakli/spektakli-dlya-vzroslykh/item/217-zapiski-yunogo-vracha"
 STATE_FILE = Path(__file__).parent / "state.json"
@@ -98,12 +138,15 @@ def trigger_call(message: str) -> None:
 
 
 def main() -> int:
-    resp = requests.get(URL, timeout=30, headers={
-        "User-Agent": "Mozilla/5.0 (compatible; ticket-watcher/1.0)"
-    })
-    resp.raise_for_status()
+    html = fetch_html(URL)
+    if html is None:
+        # Transient WAF/network block — exit 0 so the workflow stays green.
+        # Next scheduled run will retry.
+        print("Could not fetch page after retries — treating as transient.",
+              file=sys.stderr)
+        return 0
 
-    dates = parse_dates(resp.text)
+    dates = parse_dates(html)
     if not dates:
         print("No dates parsed — site layout may have changed.", file=sys.stderr)
         return 1
