@@ -69,6 +69,38 @@ DATE_RE = re.compile(
     r"(\d{1,2})\s+([А-Яа-яёЁ]+),\s*[А-Яа-яёЁ]+,\s*(\d{1,2}):(\d{2})"
 )
 
+# After this many consecutive failed runs (10 min apart = 1 hour),
+# call the phone with a "watcher is broken" alert. The streak resets
+# on the next successful parse.
+WATCHDOG_THRESHOLD = 6
+
+
+def utcnow_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def handle_soft_failure(reason: str) -> None:
+    """Record a soft failure, alert via Twilio if streak hits threshold."""
+    state = load_state()
+    streak = state.get("consecutive_failures", 0) + 1
+    state["consecutive_failures"] = streak
+    state["last_failure_reason"] = reason
+    state["last_failure_at"] = utcnow_iso()
+    save_state(state)
+    print(f"Soft failure #{streak}: {reason}", file=sys.stderr)
+
+    if streak == WATCHDOG_THRESHOLD:
+        print(f"Watchdog: {streak} failures in a row — alerting via phone.",
+              file=sys.stderr)
+        try:
+            trigger_call(
+                "Внимание! Сторож билетов уже целый час не может обработать "
+                "сайт театра. Проверь логи на GitHub."
+            )
+        except Exception:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+
 
 def parse_dates(html: str) -> list[date]:
     soup = BeautifulSoup(html, "html.parser")
@@ -140,16 +172,13 @@ def trigger_call(message: str) -> None:
 def main() -> int:
     html = fetch_html(URL)
     if html is None:
-        # Transient WAF/network block — exit 0 so the workflow stays green.
-        # Next scheduled run will retry.
-        print("Could not fetch page after retries — treating as transient.",
-              file=sys.stderr)
+        handle_soft_failure("fetch failed after retries")
         return 0
 
     dates = parse_dates(html)
     if not dates:
-        print("No dates parsed — site layout may have changed.", file=sys.stderr)
-        return 1
+        handle_soft_failure("no dates parsed from page")
+        return 0
 
     latest = max(dates)
     state = load_state()
@@ -170,16 +199,34 @@ def main() -> int:
         print(f"NEW DATE detected: {latest.isoformat()} > {prev_iso}. Calling…")
         trigger_call(msg)
 
+    # Success — reset failure tracking
+    prior_failures = state.get("consecutive_failures", 0)
+    if prior_failures:
+        print(f"Recovered after {prior_failures} consecutive failures.",
+              file=sys.stderr)
+    state["consecutive_failures"] = 0
+    state.pop("last_failure_reason", None)
+    state.pop("last_failure_at", None)
+
     if first_run or new_date_appeared:
         state["latest_date"] = latest.isoformat()
-        state["last_checked"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        save_state(state)
-    else:
-        state["last_checked"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        save_state(state)
+    state["last_checked"] = utcnow_iso()
+    save_state(state)
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Never let an unexpected error fail the workflow — that just spams
+    # email notifications. The phone call is the source of truth for both
+    # new dates AND a broken watcher (watchdog after 1h of failures).
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        try:
+            handle_soft_failure("unhandled exception in main")
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+        sys.exit(0)
