@@ -1,7 +1,7 @@
 {
   "latest_date": "2026-10-28",
   "last_checked": "2026-10-05T14:20:16Z",
-  "consecutive_failures": 7,
+  "consecutive_failures": 8,
   "last_failure_reason": "no dates parsed from page",
-  "last_failure_at": "2026-10-07T06:04:52Z"
+  "last_failure_at": "2026-10-07T13:17:55Z"
 }
