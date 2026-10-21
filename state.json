@@ -1,7 +1,7 @@
 {
   "latest_date": "2026-11-28",
   "last_checked": "2026-10-21T16:06:19Z",
-  "consecutive_failures": 1,
+  "consecutive_failures": 2,
   "last_failure_reason": "fetch failed after retries",
-  "last_failure_at": "2026-10-21T20:10:35Z"
+  "last_failure_at": "2026-10-21T23:23:20Z"
 }
